@@ -11,11 +11,50 @@ env:
   DOCKER_HUB_REPOSITORY: lynx-frontend
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
         uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and cache Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: false
+          tags: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/docker-image.tar
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-image
+          path: /tmp/docker-image.tar
+
+  push:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: |
+          docker load --input /tmp/docker-image.tar
+          docker image ls -a
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
@@ -23,16 +62,8 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Push to Docker Hub
+        run: |
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}:${{ github.sha }}
+          docker tag ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}:${{ github.sha }} ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}:latest
+          docker push ${{ env.DOCKER_HUB_USERNAME }}/${{ env.DOCKER_HUB_REPOSITORY }}:latest
